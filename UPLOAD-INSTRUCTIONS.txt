@@ -1,0 +1,1 @@
+Upload ALL 11 other files in this folder to the ROOT of your stevoano1-del/jathan-shopmate GitHub repository. Keep all file names unchanged. Do not upload this ZIP file, or put these files inside a subfolder. Commit your upload to main. Railway is connected and will automatically deploy the Dockerfile.
