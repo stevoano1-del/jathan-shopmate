@@ -54,3 +54,27 @@ Run `npm install`, then `npm run build`. Dependencies are pinned in package.json
 ## Hosting status
 
 This ZIP is runnable and tested locally. It has not been deployed to an external host and does not include a public standalone URL. The earlier ChatGPT-hosted test remains separate.
+
+## Safety update
+
+CSV imports now require a preview and confirmation. Missing headers, invalid values and duplicate headers are rejected. Duplicates with matching section/name/unit or SKU are skipped. Up to 1,000 products are imported atomically; changes after preview require a fresh preview.
+
+Settings → Automatic backups & restore is available to owners. The server saves changed business records hourly and verifies a daily SQLite backup. Backups are retained for 30 days, with the newest business snapshot retained. Restoring shows the record counts, requires the business name, saves a safety copy and rejects concurrent changes. Business restoration preserves accounts and staff permissions.
+
+Offsite backup uses the private Railway shopmate-backups bucket when BACKUP_ENDPOINT, BACKUP_BUCKET, BACKUP_REGION, BACKUP_ACCESS_KEY_ID, BACKUP_SECRET_ACCESS_KEY and BACKUP_URL_STYLE are configured. These values must remain server secrets. The database upload is downloaded again and its SHA-256 checked before recording cloud success. Photos are copied separately. Check Settings for the last successful cloud backup and any failures after deployment.
+
+For total disk loss, an operator must stop the service, download the latest private databases/database-YYYY-MM-DD.sqlite backup to the configured DATA_DIR database path (see server/storage.ts), restore photos/ from the bucket, preserve file ownership and restart one instance. Do not overwrite a running database. In-app restoration covers business records on the current disk; it does not recover deleted accounts or a lost disk. Never upload backups into the public GitHub repository.
+
+Validation: 25 original integration checks and 52 hardening checks cover imports, historical costs, returns, business isolation, role permissions, restored records, SQLite integrity, persistence and protected photos. Cloud round-trip verification is implemented but requires the updated release to be deployed before checking the actual Railway bucket.
+
+## Photo entry and faster sales
+
+Products → Add from invoice photo: photograph or choose a JPG/PNG/WebP under 10 MB. English printed text is read on the device using Tesseract.js 5.1.1. Reader software and language assets download from public CDNs, requiring internet. The image is not sent to those CDNs. Reading accuracy depends on lighting and invoice layout. PDFs and handwriting are not supported.
+
+The table contains suggestions, not confirmed inventory. Verify names, actual stock quantities, units and unit costs; enter selling prices. Unclear values are blank. Check duplicates & preview, then confirm import. No product or stock is saved during reading. This creates new products; use Add Stock for existing goods. Product photographs can be supplied separately when adding a product. Invoice photos do not automatically become product pictures.
+
+Sell: tap a product card. Repeated taps increase the same cart line. Use +/− for quantities. Frozen kg/g products open common weight buttons or an exact weight field. The operator must weigh variable portions; the app does not connect to a scale. Popular products appear first, based on the displayed sales period. Section tabs filter products.
+
+Owner: Staff & Settings → Add staff → Cashier → assigned sections. Share the private invitation code with the worker. They create their own account using that email and code, or sign in and accept an invitation. Cashiers start on Sell and see a sales-only navigation. Server rules block imports, stock administration, price overrides, discounts, refunds and reports. Sales record the worker email. Owners retain reports and administration.
+
+Validation: production build, 77 integration checks and 8 invoice parsing checks passed. The reader CDN assets returned HTTP 200. A real phone camera/photo workflow still needs device testing after deployment.

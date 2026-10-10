@@ -1,8 +1,8 @@
 // server/index.ts
 import http from "node:http";
-import fs2 from "node:fs";
-import path2 from "node:path";
-import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual, createHash } from "node:crypto";
+import fs3 from "node:fs";
+import path3 from "node:path";
+import { randomBytes, randomUUID as randomUUID2, scrypt as scryptCb, timingSafeEqual, createHash as createHash3 } from "node:crypto";
 import { promisify } from "node:util";
 
 // server/storage.ts
@@ -49,6 +49,70 @@ var bucket = { async put(key, buffer, opt) {
 } };
 var env = { DB: db, BUCKET: bucket };
 
+// shared/products.ts
+var normal = (v) => String(v ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+var productKey = (p) => [normal(p.section), normal(p.name), normal(p.unit)].join("|");
+function sameProduct(a, b) {
+  return productKey(a) === productKey(b) || normal(a.sku) && normal(a.section) === normal(b.section) && normal(a.sku) === normal(b.sku);
+}
+function validateProduct(a, sections) {
+  const errors = [];
+  const name = String(a.name ?? "").trim(), unit = normal(a.unit) || "piece";
+  const section = sections.find((s) => normal(s) === normal(a.section));
+  if (!name || name.length > 150) errors.push("Product name is required (maximum 150 characters).");
+  if (!section) errors.push("Section does not match your business.");
+  if (!/^[\p{L}\p{N} _-]{1,30}$/u.test(unit)) errors.push("Enter a valid selling unit.");
+  const numeric = (k) => {
+    const raw = a[k];
+    const n = Number(raw);
+    if (raw === void 0 || raw === null || String(raw).trim() === "" || !Number.isFinite(n) || n < 0 || n > 1e12) {
+      errors.push(k + " must be a non-negative number.");
+      return 0;
+    }
+    return n;
+  };
+  const quantity = numeric("quantity"), cost = numeric("cost"), price = numeric("price"), threshold = numeric("threshold");
+  if (!["kg", "g"].includes(unit) && quantity % 1) errors.push("Opening quantity must be whole items for " + unit + ".");
+  const expiry2 = String(a.expiry || "");
+  const expiryDate = /* @__PURE__ */ new Date(expiry2 + "T00:00:00Z");
+  if (expiry2 && (!Number.isFinite(expiryDate.getTime()) || !/^\d{4}-\d{2}-\d{2}$/.test(expiry2) || expiryDate.toISOString().slice(0, 10) !== expiry2 || expiry2 < (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" }))) errors.push("Expiry must be a valid date that has not passed.");
+  return { errors, product: { name, section: section || String(a.section), unit, quantity, cost, price, threshold, sku: String(a.sku || "").trim(), category: String(a.category || "").trim(), expiry: expiry2 } };
+}
+function previewProducts(rows, existing, sections) {
+  if (!Array.isArray(rows) || rows.length > 1e3) throw Error("Import up to 1,000 products at a time.");
+  const accepted = [];
+  const results = rows.map((row, index) => {
+    const checked = validateProduct(row, sections);
+    const duplicate = !checked.errors.length && [...existing, ...accepted].some((p) => sameProduct(p, checked.product));
+    const status = checked.errors.length ? "Invalid" : duplicate ? "Duplicate" : "Ready";
+    if (status === "Ready") accepted.push(checked.product);
+    return { row: index + 2, status, errors: checked.errors, product: checked.product };
+  });
+  return { results, accepted, ready: accepted.length, duplicates: results.filter((x) => x.status === "Duplicate").length, invalid: results.filter((x) => x.status === "Invalid").length };
+}
+
+// shared/finance.ts
+var cents = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+function calculateReport(s, { section = "All sections", from = "", to = "" } = {}) {
+  const selected = (x) => section === "All sections" || x.section === section;
+  const inRange = (at) => {
+    const d = new Date(at).toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+    return (!from || d >= from) && (!to || d <= to);
+  };
+  let revenue = 0, cost = 0, returnedLoss = 0;
+  for (const sale of s.sales.filter((x) => inRange(x.at))) for (const i of sale.items.filter(selected)) {
+    const refunds = (sale.refunds || []).filter((r) => r.product === i.product && (r.itemIndex === void 0 || r.itemIndex === sale.items.indexOf(i)));
+    const remaining = 1 - (i.returned || 0) / i.quantity;
+    revenue += i.total * remaining;
+    cost += (i.cost || 0) * remaining;
+    returnedLoss += refunds.filter((r) => !r.resellable).reduce((n, r) => n + (r.cost || 0), 0);
+  }
+  const expenses = s.expenses.filter((e) => inRange(e.at) && selected(e));
+  const expenseTotal = expenses.reduce((n, e) => n + e.amount, 0);
+  const gross = revenue - cost;
+  return { netSales: cents(revenue), costOfGoodsSold: cents(cost), grossProfit: cents(gross), expenses: cents(expenseTotal), nonResellableReturns: cents(returnedLoss), estimatedOperatingProfit: cents(gross - expenseTotal - returnedLoss), stockValue: cents(s.products.filter(selected).reduce((n, p) => n + p.quantity * p.cost, 0)), sharedExpensesExcluded: section !== "All sections" };
+}
+
 // server/shop.ts
 var db2 = () => env.DB;
 var uid = () => crypto.randomUUID();
@@ -81,7 +145,7 @@ async function GET(req) {
     const s = JSON.parse(c.row.data);
     const image = new URL(req.url).searchParams.get("image");
     if (image) {
-      if (!image.startsWith(c.id + "/")) return Response.json({ error: "Forbidden" }, { status: 403 });
+      if (!image.startsWith(c.id + "/") || c.role === "Cashier" && !s.products.some((p) => p.image === image && c.sections.includes(p.section))) return Response.json({ error: "Forbidden" }, { status: 403 });
       const obj = await env.BUCKET.get(image);
       if (!obj) return new Response("Not found", { status: 404 });
       return new Response(obj.body, { headers: { "Content-Type": obj.httpMetadata?.contentType || "image/jpeg", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" } });
@@ -117,13 +181,14 @@ async function POST(req) {
     };
     const num = (v, min = 0) => {
       const n = Number(v);
-      if (!Number.isFinite(n) || n < min) fail("Enter a valid amount or quantity.");
+      if (v === null || v === void 0 || String(v).trim() === "" || !Number.isFinite(n) || n < min || n > 1e12) fail("Enter a valid amount or quantity.");
       return n;
     };
     const product = (id) => s.products.find((p) => p.id === id) || fail("Product not found");
     const move = (p, q, type, reason, photo = "") => s.movements.unshift({ id: uid(), product: p.id, name: p.name, section: p.section, quantity: q, type, reason, photo, at: now, by: c.email });
     if (a.type === "staff") {
       owner();
+      if (!Array.isArray(a.sections) || a.sections.some((x) => !s.sections.includes(x))) fail("Invalid staff sections");
       if (new URL(req.url).searchParams.get("demo") === "1") fail("Staff access is available in your real business.");
       const email = String(a.email || "").trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email === c.row.owner) fail("Enter a different valid staff email.");
@@ -149,6 +214,10 @@ async function POST(req) {
     }
     if (a.type === "product") {
       manage();
+      const checked = validateProduct(a, s.sections);
+      if (checked.errors.length) fail(checked.errors.join(" "));
+      Object.assign(a, checked.product);
+      if (s.products.some((p2) => sameProduct(p2, a))) fail("This product already exists. Use Add Stock to receive more goods.");
       if (!s.sections.includes(a.section)) fail("Choose a section");
       const q = num(a.quantity), cost = num(a.cost), price = num(a.price);
       if (!String(a.name || "").trim()) fail("Product name required");
@@ -180,6 +249,7 @@ async function POST(req) {
       p.cost = (p.quantity * p.cost + q * cost) / (p.quantity + q);
       p.quantity += q;
       if (a.expiry) {
+        if (!p.expiryTracked && p.quantity - q > 0) fail("Existing untracked stock needs an expiry batch before switching to expiry tracking.");
         p.expiryTracked = true;
         p.batches.push({ id: uid(), quantity: q, expiry: a.expiry });
       }
@@ -201,6 +271,7 @@ async function POST(req) {
     };
     if (a.type === "sale") {
       if (s.sales.some((x) => x.id === a.id)) return Response.json({ ok: true, duplicate: true });
+      if (!a.id || typeof a.id !== "string" || a.id.length > 100) fail("A valid receipt ID is required");
       if (!Array.isArray(a.items) || !a.items.length) fail("Cart is empty");
       const items = [];
       for (const i of a.items) {
@@ -213,7 +284,7 @@ async function POST(req) {
         const q = count * u.factor;
         if (!["kg", "g"].includes(p.unit) && q % 1) fail("Whole quantities required");
         deduct(p, q);
-        items.push({ product: p.id, name: p.name, section: p.section, unit: u.name, quantity: count, baseQuantity: q, price, total: count * price, cost: q * p.cost, returned: 0 });
+        items.push({ product: p.id, name: p.name, section: p.section, unit: u.name, quantity: count, baseQuantity: q, price, total: cents(count * price), cost: cents(q * p.cost), returned: 0 });
         move(p, -q, "Sale", a.id);
       }
       const subtotal = items.reduce((n, i) => n + i.total, 0);
@@ -225,22 +296,25 @@ async function POST(req) {
         i.total -= share;
         i.price = i.total / i.quantity;
       }
-      const total = subtotal - discount;
+      const total = cents(subtotal - discount);
+      if (!Array.isArray(a.payments) || a.payments.some((p) => !["Cash", "Bank transfer", "POS/card"].includes(p.method))) fail("Choose a valid payment method");
       const paid = (a.payments || []).reduce((n, x) => n + num(x.amount), 0);
-      if (Math.abs(paid - total) > 0.01) fail("Payments must equal the sale total");
+      if (Math.abs(paid - total) > 5e-3) fail("Payments must equal the sale total");
       s.sales.unshift({ id: a.id || uid(), items, total, cost: items.reduce((n, i) => n + i.cost, 0), discount, payments: a.payments, at: now, by: c.email, refunds: [] });
     }
     if (a.type === "return") {
       manage();
       const sale = s.sales.find((x) => x.id === a.sale) || fail("Sale not found");
-      const i = sale.items[Number(a.index)] || fail("Item not found");
+      const itemIndex = Number(a.index);
+      if (!Number.isInteger(itemIndex)) fail("Invalid sale item");
+      const i = sale.items[itemIndex] || fail("Item not found");
       const q = num(a.quantity, 1e-6);
       if (!["kg", "g"].includes(product(i.product).unit) && q * i.baseQuantity / i.quantity % 1) fail("Return must convert to whole items");
       if (q > i.quantity - i.returned + 1e-8) fail("Return exceeds remaining sold quantity");
       if (!a.reason) fail("Reason required");
       const p = product(i.product), base = q * i.baseQuantity / i.quantity;
       i.returned += q;
-      const refund = { id: uid(), product: i.product, section: i.section, quantity: q, amount: q * i.price, cost: q * i.cost / i.quantity, resellable: !!a.resellable, at: now, reason: a.reason };
+      const refund = { id: uid(), product: i.product, itemIndex, section: i.section, quantity: q, amount: cents(q * i.price), cost: cents(q * i.cost / i.quantity), resellable: !!a.resellable, at: now, reason: a.reason };
       sale.refunds.push(refund);
       if (a.resellable) {
         if (p.expiryTracked && (!a.expiry || a.expiry < businessDate)) fail("Valid expiry required for return");
@@ -271,6 +345,7 @@ async function POST(req) {
     }
     if (a.type === "countStart") {
       manage();
+      if (!s.sections.includes(a.section)) fail("Choose a valid section");
       s.counts.unshift({ id: uid(), section: a.section, status: "Counting", at: now, by: c.email, items: s.products.filter((p) => p.section === a.section).map((p) => ({ product: p.id, name: p.name, expected: p.quantity, actual: null })), movementIds: s.movements.map((m) => m.id) });
     }
     if (a.type === "countSubmit") {
@@ -300,7 +375,8 @@ async function POST(req) {
     }
     if (a.type === "expense") {
       manage();
-      s.expenses.unshift({ id: uid(), category: a.category || "Other", amount: num(a.amount, 0.01), section: a.section || "Business", note: a.note || "", at: now, by: c.email });
+      if (a.section && a.section !== "Business" && !s.sections.includes(a.section)) fail("Choose a valid section");
+      s.expenses.unshift({ id: uid(), category: a.category || "Other", amount: cents(num(a.amount, 0.01)), section: a.section || "Business", note: a.note || "", at: now, by: c.email });
     }
     if (a.type === "price") {
       owner();
@@ -337,6 +413,28 @@ async function POST(req) {
       if (count.status === "Approved") fail("Approved counts cannot be cancelled");
       count.status = "Cancelled";
     }
+    if (a.type === "report") {
+      manage();
+      if (a.section && a.section !== "All sections" && !s.sections.includes(a.section)) fail("Choose a valid section");
+      return Response.json({ report: calculateReport(s, a) });
+    }
+    if (a.type === "importPreview" || a.type === "importProducts") {
+      manage();
+      const preview = previewProducts(a.rows, s.products, s.sections);
+      if (a.type === "importPreview") return Response.json({ ...preview, accepted: void 0, version: c.row.version });
+      if (a.version !== c.row.version) return Response.json({ error: "Stock changed since your preview. Preview the file again before importing." }, { status: 409 });
+      if (preview.invalid) fail("Correct invalid rows before importing.");
+      if (!preview.ready) return Response.json({ ok: true, imported: 0, duplicates: preview.duplicates });
+      for (const row of preview.accepted) {
+        const p = { ...row, id: uid(), units: [{ name: row.unit, factor: 1, price: row.price }], batches: row.expiry ? [{ id: uid(), quantity: row.quantity, expiry: row.expiry }] : [], expiryTracked: !!row.expiry };
+        s.products.push(p);
+        move(p, row.quantity, "Opening stock", "CSV import");
+      }
+      s.audit.unshift({ id: uid(), action: "Import products", count: preview.ready, at: now, by: c.email });
+      const result2 = await db2().prepare("UPDATE businesses SET data=?,version=version+1 WHERE id=? AND version=?").bind(JSON.stringify(s), c.id, c.row.version).run();
+      if (!result2.meta.changes) return Response.json({ error: "Stock changed. Preview again before importing." }, { status: 409 });
+      return Response.json({ ok: true, imported: preview.ready, duplicates: preview.duplicates });
+    }
     const known = ["price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
     if (!known.includes(a.type)) fail("Unknown action");
     s.audit.unshift({ id: uid(), action: a.type, at: now, by: c.email });
@@ -348,12 +446,198 @@ async function POST(req) {
   }
 }
 
+// server/backups.ts
+import fs2 from "node:fs";
+import path2 from "node:path";
+import { backup, DatabaseSync as DatabaseSync2 } from "node:sqlite";
+import { randomUUID, createHash as createHash2 } from "node:crypto";
+
+// server/cloud-backup.ts
+import { createHash, createHmac } from "node:crypto";
+var hash = (x) => createHash("sha256").update(x).digest("hex");
+var mac = (key, value) => createHmac("sha256", key).update(value).digest();
+var encode = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+function cloudConfigured() {
+  return !!(process.env.BACKUP_ENDPOINT && process.env.BACKUP_BUCKET && process.env.BACKUP_ACCESS_KEY_ID && process.env.BACKUP_SECRET_ACCESS_KEY);
+}
+function signS3(method, key, body = Buffer.alloc(0), now = /* @__PURE__ */ new Date()) {
+  if (!cloudConfigured()) throw Error("Cloud backup is not configured.");
+  const endpoint = new URL(process.env.BACKUP_ENDPOINT);
+  const bucket2 = process.env.BACKUP_BUCKET;
+  const style = process.env.BACKUP_URL_STYLE || "virtual-host";
+  const parts = key.split("/").map(encode).join("/");
+  if (style === "path") endpoint.pathname = "/" + encode(bucket2) + "/" + parts;
+  else {
+    endpoint.hostname = bucket2 + "." + endpoint.hostname;
+    endpoint.pathname = "/" + parts;
+  }
+  endpoint.search = "";
+  const stamp = now.toISOString().replace(/[:-]|\.\d{3}/g, ""), day = stamp.slice(0, 8), region = process.env.BACKUP_REGION || "auto";
+  const payloadHash = hash(body);
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalHeaders = `host:${endpoint.host}
+x-amz-content-sha256:${payloadHash}
+x-amz-date:${stamp}
+`;
+  const canonical = [method, endpoint.pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${day}/${region}/s3/aws4_request`;
+  const toSign = `AWS4-HMAC-SHA256
+${stamp}
+${scope}
+${hash(canonical)}`;
+  const signingKey = mac(mac(mac(mac("AWS4" + process.env.BACKUP_SECRET_ACCESS_KEY, day), region), "s3"), "aws4_request");
+  const signature = createHmac("sha256", signingKey).update(toSign).digest("hex");
+  return { url: endpoint.href, headers: { "x-amz-date": stamp, "x-amz-content-sha256": payloadHash, Authorization: `AWS4-HMAC-SHA256 Credential=${process.env.BACKUP_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` } };
+}
+async function cloudRequest(method, key, body = Buffer.alloc(0)) {
+  const signed = signS3(method, key, body);
+  const r = await fetch(signed.url, { method, headers: signed.headers, body: ["PUT", "POST"].includes(method) ? body : void 0, signal: AbortSignal.timeout(3e4) });
+  if (!r.ok) throw Error("Cloud backup request failed (" + r.status + ").");
+  return Buffer.from(await r.arrayBuffer());
+}
+
+// server/backups.ts
+var root = path2.join(dataDir, "backups");
+fs2.mkdirSync(root, { recursive: true });
+var folder = (business) => path2.join(root, "businesses", createHash2("sha256").update(business).digest("hex"));
+var latestStatus = path2.join(root, "status.json");
+var running = false;
+var atomic = (file, value) => {
+  fs2.mkdirSync(path2.dirname(file), { recursive: true });
+  fs2.writeFileSync(file + ".tmp", value, { mode: 384 });
+  fs2.renameSync(file + ".tmp", file);
+};
+function listBackups(business) {
+  const dir = folder(business);
+  if (!fs2.existsSync(dir)) return [];
+  return fs2.readdirSync(dir).filter((f) => /^[0-9a-f-]{36}\.json$/.test(f)).map((f) => {
+    const p = JSON.parse(fs2.readFileSync(path2.join(dir, f), "utf8"));
+    return { id: p.id, at: p.at, reason: p.reason, version: p.version, products: p.data.products.length, sales: p.data.sales.length, cloud: fs2.existsSync(path2.join(dir, f + ".cloud")) };
+  }).sort((a, b) => b.at.localeCompare(a.at));
+}
+function readBusinessBackup(business, id) {
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw Error("Invalid backup reference.");
+  const file = path2.join(folder(business), id + ".json");
+  if (!fs2.existsSync(file)) throw Error("Backup not found for your business.");
+  const p = JSON.parse(fs2.readFileSync(file, "utf8"));
+  if (p.format !== "shopmate-business-v1" || p.business !== business) throw Error("Backup does not belong to this business.");
+  if (!Array.isArray(p.data.products) || !Array.isArray(p.data.sales)) throw Error("Backup is invalid.");
+  return p;
+}
+async function snapshotBusiness(row, reason = "Manual backup") {
+  const payload = { format: "shopmate-business-v1", id: randomUUID(), business: row.id, at: (/* @__PURE__ */ new Date()).toISOString(), reason, version: row.version, data: JSON.parse(row.data) };
+  const file = path2.join(folder(row.id), payload.id + ".json");
+  atomic(file, JSON.stringify(payload));
+  readBusinessBackup(row.id, payload.id);
+  if (cloudConfigured()) {
+    try {
+      await cloudRequest("PUT", "businesses/" + path2.basename(folder(row.id)) + "/" + payload.id + ".json", fs2.readFileSync(file));
+      atomic(file + ".cloud", "saved");
+    } catch (e) {
+      console.error("Business cloud backup failed:", e.message);
+    }
+  }
+  return payload;
+}
+function backupStatus(business) {
+  let status = {};
+  try {
+    status = JSON.parse(fs2.readFileSync(latestStatus, "utf8"));
+  } catch {
+  }
+  const list = listBackups(business);
+  return { lastBusinessBackup: list[0] || null, lastAutomaticBackup: status.at || null, lastCloudBackup: status.cloudAt || null, cloudConfigured: cloudConfigured(), lastError: status.error || null, retentionDays: 30 };
+}
+async function photosToCloud() {
+  const dir = path2.join(dataDir, "photos");
+  if (!cloudConfigured() || !fs2.existsSync(dir)) return;
+  const walk = (d) => fs2.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path2.join(d, e.name)) : [path2.join(d, e.name)]);
+  for (const f of walk(dir)) {
+    if (f.endsWith(".cloud")) continue;
+    const marker = path2.join(root, "photo-markers", createHash2("sha256").update(f).digest("hex"));
+    if (fs2.existsSync(marker)) continue;
+    await cloudRequest("PUT", "photos/" + path2.relative(dir, f).split(path2.sep).join("/"), fs2.readFileSync(f));
+    atomic(marker, "saved");
+  }
+}
+async function runAutomaticBackup() {
+  if (running) return;
+  running = true;
+  let at = (/* @__PURE__ */ new Date()).toISOString();
+  let status = { at: null, cloudAt: null, error: null };
+  try {
+    try {
+      status = JSON.parse(fs2.readFileSync(latestStatus, "utf8"));
+    } catch {
+    }
+    const rows = sqlite.prepare("SELECT * FROM businesses").all();
+    for (const row of rows) {
+      const last = listBackups(row.id)[0];
+      if (!last || last.version !== row.version) await snapshotBusiness(row, "Automatic backup");
+      const dir = folder(row.id);
+      if (fs2.existsSync(dir)) for (const file of fs2.readdirSync(dir).filter((x) => /^[0-9a-f-]{36}\.json$/.test(x))) {
+        if (!fs2.existsSync(path2.join(dir, file + ".cloud")) && cloudConfigured()) {
+          await cloudRequest("PUT", "businesses/" + path2.basename(dir) + "/" + file, fs2.readFileSync(path2.join(dir, file)));
+          atomic(path2.join(dir, file + ".cloud"), "saved");
+        }
+      }
+    }
+    const dbFile = path2.join(root, "database-" + at.slice(0, 10) + ".sqlite");
+    await backup(sqlite, dbFile);
+    const verify = new DatabaseSync2(dbFile, { readOnly: true });
+    try {
+      const check = verify.prepare("PRAGMA integrity_check").get();
+      if (check.integrity_check !== "ok") throw Error("Backup integrity check failed.");
+    } finally {
+      verify.close();
+    }
+    if (cloudConfigured()) {
+      const bytes = fs2.readFileSync(dbFile), key = "databases/" + path2.basename(dbFile);
+      await cloudRequest("PUT", key, bytes);
+      const recovered = await cloudRequest("GET", key);
+      if (!createHash2("sha256").update(bytes).digest().equals(createHash2("sha256").update(recovered).digest())) throw Error("Cloud backup verification failed.");
+      await photosToCloud();
+      status.cloudAt = at;
+      console.log("Automatic cloud database backup uploaded and recovery copy verified.");
+    }
+    status.at = at;
+    status.error = null;
+    const cutoff = Date.now() - 30 * 864e5;
+    for (const row of rows) {
+      const snapshots = listBackups(row.id);
+      for (const b of snapshots.slice(1).filter((b2) => new Date(b2.at).getTime() < cutoff)) {
+        const file = path2.join(folder(row.id), b.id + ".json");
+        if (cloudConfigured()) await cloudRequest("DELETE", "businesses/" + path2.basename(folder(row.id)) + "/" + b.id + ".json");
+        fs2.rmSync(file, { force: true });
+        fs2.rmSync(file + ".cloud", { force: true });
+      }
+    }
+    for (const f of fs2.readdirSync(root).filter((x) => /^database-\d{4}-\d{2}-\d{2}\.sqlite$/.test(x))) {
+      if (new Date(f.slice(9, 19)).getTime() < cutoff) {
+        if (cloudConfigured()) await cloudRequest("DELETE", "databases/" + f);
+        fs2.rmSync(path2.join(root, f), { force: true });
+      }
+    }
+  } catch (e) {
+    status.error = "An automatic backup failed. Your current records are still saved; retry a backup or contact Jathan Global.";
+    console.error("Automatic backup failed:", e.message);
+  } finally {
+    atomic(latestStatus, JSON.stringify(status));
+    running = false;
+  }
+}
+function startBackups() {
+  if (process.env.BACKUP_DISABLED === "true") return;
+  setTimeout(() => void runAutomaticBackup(), 2e3).unref();
+  setInterval(() => void runAutomaticBackup(), Number(process.env.BACKUP_INTERVAL_MS) || 36e5).unref();
+}
+
 // server/index.ts
 var scrypt = promisify(scryptCb);
-var sha = (v) => createHash("sha256").update(v).digest("hex");
+var sha = (v) => createHash3("sha256").update(v).digest("hex");
 var json = (v, status = 200) => Response.json(v, { status });
 var port = Number(process.env.PORT || 3e3);
-var client = path2.resolve("dist/client");
+var client = path3.resolve("dist/client");
 var secure = process.env.SECURE_COOKIE === "true";
 var expiry = () => Date.now() + 7 * 864e5;
 var limits = /* @__PURE__ */ new Map();
@@ -367,17 +651,17 @@ function rate(ip) {
     x = { n: 0, until: now + 6e4 };
     limits.set(ip, x);
   }
-  return ++x.n <= 12;
+  return ++x.n <= (Number(process.env.AUTH_RATE_LIMIT) || 12);
 }
 async function hashPassword(v) {
   const salt = randomBytes(16).toString("hex");
-  const hash = await scrypt(v, salt, 64);
-  return salt + ":" + hash.toString("hex");
+  const hash2 = await scrypt(v, salt, 64);
+  return salt + ":" + hash2.toString("hex");
 }
 async function matches(v, stored) {
-  const [salt, hash] = stored.split(":");
+  const [salt, hash2] = stored.split(":");
   const b = await scrypt(v, salt, 64);
-  const a = Buffer.from(hash, "hex");
+  const a = Buffer.from(hash2, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
 }
 var passwordValid = (v) => typeof v === "string" && v.length >= 10 && v.length <= 128;
@@ -436,7 +720,7 @@ async function auth(req, ip) {
     if (!String(a.name || "").trim()) return json({ error: "Enter your name." }, 400);
     let invite = null;
     if (a.invite) invite = inviteFor(email, String(a.invite));
-    const id = randomUUID(), password = await hashPassword(a.password);
+    const id = randomUUID2(), password = await hashPassword(a.password);
     sqlite.exec("BEGIN IMMEDIATE");
     try {
       sqlite.prepare("INSERT INTO users(id,email,name,password,created) VALUES(?,?,?,?,?)").run(id, email, String(a.name).trim().slice(0, 100), password, (/* @__PURE__ */ new Date()).toISOString());
@@ -503,7 +787,7 @@ async function shop(req) {
   }
   if (req.method === "GET") {
     const r = await GET(trusted);
-    if (!r.ok) return r;
+    if (!r.ok || new URL(req.url).searchParams.has("image")) return r;
     const j = await r.json();
     if (j.role === "Owner") {
       const member = sqlite.prepare("SELECT business FROM members WHERE email=?").get(user.email);
@@ -525,6 +809,45 @@ async function shop(req) {
     return r;
   }
   return json({ error: "Method not allowed" }, 405);
+}
+async function backups(req) {
+  const user = sessionUser(req);
+  if (!user) return json({ error: "Sign in required" }, 401);
+  const h = new Headers();
+  h.set("oai-authenticated-user-id", user.id);
+  h.set("oai-authenticated-user-email", user.email);
+  const c = await context(new Request(req.url, { headers: h }));
+  if (!c || c.role !== "Owner") return json({ error: "Only the business owner can access backups." }, 403);
+  const url = new URL(req.url);
+  if (req.method === "GET") {
+    const id = url.searchParams.get("id");
+    if (id) {
+      const b = readBusinessBackup(c.id, id);
+      return json({ backup: { id: b.id, at: b.at, reason: b.reason, products: b.data.products.length, sales: b.data.sales.length, expenses: b.data.expenses.length }, version: c.row.version, businessName: JSON.parse(c.row.data).name });
+    }
+    return json({ backups: listBackups(c.id), status: backupStatus(c.id), version: c.row.version });
+  }
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  const a = await req.json();
+  if (a.type === "create") {
+    const b = await snapshotBusiness(c.row);
+    return json({ ok: true, id: b.id, status: backupStatus(c.id) });
+  }
+  if (a.type === "restore") {
+    const current = JSON.parse(c.row.data);
+    if (a.version !== c.row.version) return json({ error: "Your shop changed. Review the restore again before confirming." }, 409);
+    if (a.confirm !== current.name) return json({ error: "Type your current business name to confirm the restore." }, 400);
+    const b = readBusinessBackup(c.id, String(a.id));
+    for (const p of b.data.products) {
+      if (p.image && !p.image.startsWith(c.id + "/")) return json({ error: "Backup has an invalid photo reference." }, 400);
+    }
+    await snapshotBusiness(c.row, "Before restore");
+    b.data.audit.unshift({ id: randomUUID2(), action: "Restore backup", backup: a.id, at: (/* @__PURE__ */ new Date()).toISOString(), by: c.email });
+    const r = sqlite.prepare("UPDATE businesses SET data=?,version=version+1 WHERE id=? AND version=?").run(JSON.stringify(b.data), c.id, c.row.version);
+    if (!r.changes) return json({ error: "Your shop changed during restore. No records were replaced." }, 409);
+    return json({ ok: true, status: backupStatus(c.id) });
+  }
+  return json({ error: "Unknown backup action" }, 400);
 }
 var mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 var server = http.createServer(async (incoming, out) => {
@@ -555,14 +878,15 @@ var server = http.createServer(async (incoming, out) => {
     const req = new Request(url, { method: incoming.method, headers, body: ["GET", "HEAD"].includes(incoming.method || "GET") ? void 0 : Buffer.concat(chunks) });
     let r;
     if (url.pathname.startsWith("/api/auth/")) r = await auth(req, incoming.socket.remoteAddress || "unknown");
+    else if (url.pathname === "/api/backups") r = await backups(req);
     else if (url.pathname === "/api/shop") r = await shop(req);
     else if (url.pathname === "/health") r = json({ ok: true });
     else {
-      let file = path2.resolve(client, "." + decodeURIComponent(url.pathname));
-      if (!file.startsWith(client + path2.sep) && file !== client) r = new Response("Not found", { status: 404 });
+      let file = path3.resolve(client, "." + decodeURIComponent(url.pathname));
+      if (!file.startsWith(client + path3.sep) && file !== client) r = new Response("Not found", { status: 404 });
       else {
-        if (!fs2.existsSync(file) || fs2.statSync(file).isDirectory()) file = path2.join(client, "index.html");
-        r = new Response(fs2.readFileSync(file), { headers: { "Content-Type": mime[path2.extname(file)] || "application/octet-stream", "Cache-Control": url.pathname.startsWith("/assets/") ? "public,max-age=31536000,immutable" : "no-cache" } });
+        if (!fs3.existsSync(file) || fs3.statSync(file).isDirectory()) file = path3.join(client, "index.html");
+        r = new Response(fs3.readFileSync(file), { headers: { "Content-Type": mime[path3.extname(file)] || "application/octet-stream", "Cache-Control": url.pathname.startsWith("/assets/") ? "public,max-age=31536000,immutable" : "no-cache" } });
       }
     }
     const responseHeaders = Object.fromEntries(r.headers);
@@ -580,6 +904,7 @@ var server = http.createServer(async (incoming, out) => {
   }
 });
 server.listen(port, "0.0.0.0", () => console.log("Jathan ShopMate listening on port " + port));
+startBackups();
 var shutdown = () => server.close(() => {
   sqlite.close();
   process.exit(0);

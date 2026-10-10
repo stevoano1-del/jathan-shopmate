@@ -1,1 +1,13 @@
-Upload ALL 11 other files in this folder to the ROOT of your stevoano1-del/jathan-shopmate GitHub repository. Keep all file names unchanged. Do not upload this ZIP file, or put these files inside a subfolder. Commit your upload to main. Railway is connected and will automatically deploy the Dockerfile.
+JATHAN SHOPMATE PHOTO & SALES UPDATE
+
+This includes the previous safety/backup update; use this package instead of uploading both.
+
+1. Extract the ZIP.
+2. Open https://github.com/stevoano1-del/jathan-shopmate
+3. Add file > Upload files.
+4. Upload every extracted file to the repository ROOT, replacing matching files. Do not upload this outer ZIP or put the files in a subfolder. EDITABLE-SOURCE.zip is included for future maintenance.
+5. Commit to main. Railway should deploy automatically. Tell me uploaded so I can verify the live release and offsite backup.
+
+Try Products > Add from invoice photo, review and confirm. Workers use Sell and tap product buttons. Owner adds workers as Cashier in Staff & Settings.
+
+Keep the existing /data volume. Your existing records and accounts are preserved. Never put business backups or customer records on GitHub.
