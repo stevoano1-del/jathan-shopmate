@@ -23435,6 +23435,12 @@ async function POST(req) {
       if (a.section && a.section !== "Business" && !s.sections.includes(a.section)) fail("Choose a valid section");
       s.expenses.unshift({ id: uid(), category: a.category || "Other", amount: cents(num(a.amount, 0.01)), section: a.section || "Business", note: a.note || "", at: now, by: c.email });
     }
+    if (a.type === "productPhoto") {
+      owner();
+      const p = product(a.product);
+      if (a.image && (!String(a.image).startsWith(c.id + "/") || !await env.BUCKET.get(String(a.image)))) fail("Choose a valid uploaded product photo");
+      p.image = String(a.image || "");
+    }
     if (a.type === "price") {
       owner();
       const p = product(a.product);
@@ -23523,7 +23529,7 @@ async function POST(req) {
       const d = s.debtors.find((d2) => d2.id === a.id) || fail("Debtor not found");
       d.phone = whatsappPhone(String(a.phone || ""));
     }
-    const known = ["customer", "debtor", "debtorPayment", "debtorContact", "price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
+    const known = ["productPhoto", "customer", "debtor", "debtorPayment", "debtorContact", "price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
     if (!known.includes(a.type)) fail("Unknown action");
     s.audit.unshift({ id: uid(), action: a.type, at: now, by: c.email });
     const result = await db2().prepare("UPDATE businesses SET data=?,version=version+1 WHERE id=? AND version=?").bind(JSON.stringify(s), c.id, c.row.version).run();
