@@ -1,1 +1,1 @@
-Extract and upload all 13 files to the repository root on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes then tell me Uploaded. After publication, verify typed product name, quantity, category and photo-review fields on the affected phone.
+This replaces the previous product-field visibility ZIP; upload only this combined version. Extract and upload all 13 files to the repository root on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes then tell me Uploaded.
