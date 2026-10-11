@@ -1,1 +1,1 @@
-This replaces the previous product-field visibility ZIP; upload only this combined version. Extract and upload all 13 files to the repository root on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes then tell me Uploaded.
+Extract and upload all 13 files to the repository root on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes and tell me Uploaded. Includes all prior updates.
