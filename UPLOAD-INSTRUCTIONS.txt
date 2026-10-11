@@ -1,11 +1,11 @@
-JATHAN SHOPMATE OWNER & WORKER LOGIN UPDATE
+JATHAN SHOPMATE SIGN OUT & FINGERPRINT UPDATE
 
-1. Extract this ZIP.
+1. Extract this NEW ZIP.
 2. Open https://github.com/stevoano1-del/jathan-shopmate
 3. Add file > Upload files.
-4. Upload all extracted files to the repository ROOT, replacing existing matching files. Do not upload this outer ZIP or use a subfolder.
-5. Commit to main. Tell me uploaded so I can verify the live deployment.
+4. Upload ALL extracted files into the repository ROOT, replacing matching files. Especially replace server.mjs, shopmate.js, shopmate.css and index.html. Do not upload the outer ZIP or put files into a subfolder.
+5. Commit to main. Tell me uploaded so I can deploy and verify.
 
-Owner signs in normally, opens Staff & Settings > Create worker login, creates credentials and gives them privately to the worker. The worker chooses Shop worker on the login page and records completed sales. Owner Dashboard > Today’s sales by worker refreshes every five seconds while open.
+After deployment: sign in with your password, open Account, choose Enable fingerprint / phone lock and follow the phone prompt. On the login page, choose the correct owner/worker tab, then Fingerprint / phone lock. Sign out is also visible at the top.
 
-Existing accounts, products, sales and the /data volume are preserved. Do not delete the volume or upload real data/backups into GitHub. This package includes earlier photo-entry and backup features. EDITABLE-SOURCE.zip is for future maintenance.
+Existing records, accounts and the /data volume are preserved. This includes all previous changes. Do not delete the volume or upload private backups. EDITABLE-SOURCE.zip is supplied for maintenance.

@@ -92,3 +92,15 @@ Cart drafts are isolated per signed-in account on a shared device. Private busin
 Validation: the previous 85 checks plus 26 worker account checks passed (111 checks total). Worker tests cover owner provisioning, wrong passwords, login separation, worker sales attribution, section limits, forbidden administration, cross-shop reset rejection, session invalidation, access removal and password secrecy.
 
 The browser security policy now permits the version-pinned OCR reader’s CDN assets and local worker execution, correcting the previous deployment’s restriction on photo reading. Real phone photo accuracy still needs review and device testing.
+
+## Visible sign out and fingerprint / phone lock
+
+Sign out is visible in the top bar, and Account also includes a Sign out button. It invalidates the current server session and returns to the login page. A connection is needed to revoke the server session; failures are shown rather than falsely reporting sign out.
+
+Sign in with your existing password, open Account, and choose Enable fingerprint / phone lock. Follow your device prompt to save a passkey. On future visits select Shop owner or Shop worker and Fingerprint / phone lock. Use a supported HTTPS browser, preferably the normal Chrome browser on Android. The device may use a fingerprint, face recognition or its screen-lock PIN. ShopMate cannot require fingerprint over PIN and never receives or stores biometric templates. Device setup must be completed by its user; deployment cannot enroll a fingerprint automatically. Password login and owner-provided worker passwords remain available.
+
+Use your own phone for setup: anyone who can unlock a shared device may be able to use a saved passkey. Account shows registered devices/passkeys and allows removal. Password recovery and owner-triggered worker password resets revoke existing passkeys; enroll again afterwards. Removed workers cannot use a saved passkey to bypass revoked shop access.
+
+Implementation uses pinned SimpleWebAuthn 13.3.0 server and browser libraries. Registration requires an active signed-in account, a platform authenticator, discoverable credentials and user verification. Five-minute, single-use challenges are bound to an HttpOnly cookie; registration also binds to the authenticated session. Server verifies origin, relying-party domain, challenge, signatures and verification flags. Private device keys never leave the authenticator. SQLite stores credential public keys, counters and labels. New passkey tables are created automatically and included in full database backups.
+
+128 checks passed: previous 111 integration/parser checks plus 17 cryptographic passkey checks. Tests use signed synthetic WebAuthn credentials to check registration, user verification, login, replay/origin rejection, portal separation, revoked credentials, account privacy and logout. Physical fingerprint prompts still require verification on the actual phone after deployment.
