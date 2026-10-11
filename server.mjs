@@ -23040,6 +23040,15 @@ import path3 from "node:path";
 import { randomBytes as randomBytes2, randomUUID as randomUUID2, scrypt as scryptCb, timingSafeEqual, createHash as createHash3 } from "node:crypto";
 import { promisify } from "node:util";
 
+// shared/debtors.ts
+function whatsappPhone(value) {
+  let phone = String(value || "").replace(/[\s()+-]/g, "");
+  if (/^0[789]\d{9}$/.test(phone)) phone = "234" + phone.slice(1);
+  if (phone.startsWith("00")) phone = phone.slice(2);
+  if (!/^[1-9]\d{7,14}$/.test(phone)) throw Error("Enter a valid WhatsApp number, including country code (or an 11-digit Nigerian number).");
+  return phone;
+}
+
 // shared/products.ts
 var normal = (v) => String(v ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 var productKey = (p) => [normal(p.section), normal(p.name), normal(p.unit)].join("|");
@@ -23107,7 +23116,7 @@ function calculateReport(s, { section = "All sections", from = "", to = "" } = {
 // server/shop.ts
 var db2 = () => env.DB;
 var uid = () => crypto.randomUUID();
-var blank = () => ({ name: "My shop", sections: ["Provisions", "Frozen & Other Items"], products: [], sales: [], expenses: [], movements: [], counts: [], audit: [] });
+var blank = () => ({ name: "My shop", sections: ["Provisions", "Frozen & Other Items"], products: [], sales: [], expenses: [], movements: [], counts: [], audit: [], debtors: [] });
 var fail = (s) => {
   throw new Error(s);
 };
@@ -23126,8 +23135,9 @@ async function context(req) {
   return { id, email, role: demo || row.owner === email ? "Owner" : member?.role || "Cashier", sections: JSON.parse(member?.sections || "[]"), row };
 }
 function visible(c, s) {
-  if (c.role === "Owner" || c.role === "Manager") return s;
-  return { ...s, products: s.products.filter((p) => c.sections.includes(p.section)).map(({ cost, ...p }) => p), sales: s.sales.filter((x) => x.by === c.email).map(({ cost, ...x }) => ({ ...x, items: x.items.map(({ cost: cost2, ...i }) => i), refunds: x.refunds.map(({ cost: cost2, ...r }) => r) })), expenses: [], movements: [], counts: [], audit: [] };
+  if (c.role === "Owner") return s;
+  if (c.role === "Manager") return { ...s, debtors: [] };
+  return { ...s, products: s.products.filter((p) => c.sections.includes(p.section)).map(({ cost, ...p }) => p), sales: s.sales.filter((x) => x.by === c.email).map(({ cost, ...x }) => ({ ...x, items: x.items.map(({ cost: cost2, ...i }) => i), refunds: x.refunds.map(({ cost: cost2, ...r }) => r) })), expenses: [], movements: [], counts: [], audit: [], debtors: [] };
 }
 async function GET(req) {
   try {
@@ -23162,6 +23172,7 @@ async function POST(req) {
     }
     const a = await req.json();
     const s = JSON.parse(c.row.data);
+    s.debtors ||= [];
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const businessDate = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
     const owner = () => {
@@ -23294,18 +23305,24 @@ async function POST(req) {
       s.sales.unshift({ id: a.id || uid(), items, total, cost: items.reduce((n, i) => n + i.cost, 0), discount, payments: a.payments, at: now, by: c.email, refunds: [] });
     }
     if (a.type === "return") {
-      manage();
       const sale = s.sales.find((x) => x.id === a.sale) || fail("Sale not found");
+      if (c.role === "Cashier" && sale.by !== c.email) fail("Workers can only return items from their own recorded sales.");
+      if (a.returnId) {
+        if (typeof a.returnId !== "string" || a.returnId.length > 100) fail("Invalid return reference.");
+        if (sale.refunds.some((r) => r.requestId === a.returnId)) return Response.json({ ok: true, duplicate: true });
+      }
       const itemIndex = Number(a.index);
       if (!Number.isInteger(itemIndex)) fail("Invalid sale item");
       const i = sale.items[itemIndex] || fail("Item not found");
+      if (c.role === "Cashier" && !c.sections.includes(i.section)) fail("Section not permitted");
       const q = num(a.quantity, 1e-6);
       if (!["kg", "g"].includes(product(i.product).unit) && q * i.baseQuantity / i.quantity % 1) fail("Return must convert to whole items");
       if (q > i.quantity - i.returned + 1e-8) fail("Return exceeds remaining sold quantity");
       if (!a.reason) fail("Reason required");
       const p = product(i.product), base = q * i.baseQuantity / i.quantity;
+      if (c.role === "Cashier" && !c.sections.includes(p.section)) fail("Ask the owner to return stock now assigned to another section.");
       i.returned += q;
-      const refund = { id: uid(), product: i.product, itemIndex, section: i.section, quantity: q, amount: cents(q * i.price), cost: cents(q * i.cost / i.quantity), resellable: !!a.resellable, at: now, reason: a.reason };
+      const refund = { id: uid(), requestId: a.returnId || null, product: i.product, itemIndex, section: i.section, quantity: q, amount: cents(q * i.price), cost: cents(q * i.cost / i.quantity), resellable: !!a.resellable, at: now, by: c.email, reason: a.reason };
       sale.refunds.push(refund);
       if (a.resellable) {
         if (p.expiryTracked && (!a.expiry || a.expiry < businessDate)) fail("Valid expiry required for return");
@@ -23426,7 +23443,38 @@ async function POST(req) {
       if (!result2.meta.changes) return Response.json({ error: "Stock changed. Preview again before importing." }, { status: 409 });
       return Response.json({ ok: true, imported: preview.ready, duplicates: preview.duplicates });
     }
-    const known = ["price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
+    if (a.type === "debtor") {
+      owner();
+      if (typeof a.id !== "string" || !a.id || a.id.length > 100) fail("A debt reference is required.");
+      if (s.debtors.some((d) => d.id === a.id)) return Response.json({ ok: true, duplicate: true });
+      const name = String(a.name || "").trim();
+      if (!name || name.length > 150) fail("Enter the debtor name (up to 150 characters).");
+      const phone = a.phone ? whatsappPhone(String(a.phone)) : "";
+      if (!Array.isArray(a.items) || a.items.length > 100) fail("Enter up to 100 items.");
+      const items = a.items.map((i) => {
+        const name2 = String(i.name || "").trim();
+        if (!name2 || name2.length > 150) fail("Each item needs a name.");
+        return { name: name2, quantity: num(i.quantity, 1e-3), price: cents(num(i.price)) };
+      });
+      const amount = cents(items.length ? items.reduce((n, i) => n + i.quantity * i.price, 0) : num(a.amount, 0.01));
+      if (amount <= 0 || amount > 1e12) fail("Debt amount must be greater than zero.");
+      s.debtors.unshift({ id: a.id, name, phone, items, amount, note: String(a.note || "").slice(0, 2e3), payments: [], at: now, by: c.email });
+    }
+    if (a.type === "debtorPayment") {
+      owner();
+      const d = s.debtors.find((d2) => d2.id === a.id) || fail("Debtor not found");
+      if (d.payments.some((p) => p.id === a.paymentId)) return Response.json({ ok: true, duplicate: true });
+      if (typeof a.paymentId !== "string" || !a.paymentId || a.paymentId.length > 100) fail("A payment reference is required.");
+      const amount = cents(num(a.amount, 0.01)), balance = cents(d.amount - d.payments.reduce((n, p) => n + p.amount, 0));
+      if (amount > balance) fail("Payment exceeds the remaining debt.");
+      d.payments.push({ id: a.paymentId, amount, note: String(a.note || "").slice(0, 500), at: now, by: c.email });
+    }
+    if (a.type === "debtorContact") {
+      owner();
+      const d = s.debtors.find((d2) => d2.id === a.id) || fail("Debtor not found");
+      d.phone = whatsappPhone(String(a.phone || ""));
+    }
+    const known = ["debtor", "debtorPayment", "debtorContact", "price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
     if (!known.includes(a.type)) fail("Unknown action");
     s.audit.unshift({ id: uid(), action: a.type, at: now, by: c.email });
     const result = await db2().prepare("UPDATE businesses SET data=?,version=version+1 WHERE id=? AND version=?").bind(JSON.stringify(s), c.id, c.row.version).run();
@@ -23701,6 +23749,7 @@ async function auth(req, ip) {
   if (!rate(ip)) return json2({ error: "Too many attempts. Please wait a minute." }, 429);
   if (!req.headers.get("content-type")?.includes("application/json")) return json2({ error: "Invalid request" }, 400);
   const a = await req.json();
+  if (a.confirmPassword !== void 0 && a.confirmPassword !== a.password) return json2({ error: "Passwords do not match." }, 400);
   const email = String(a.email || "").trim().toLowerCase();
   if (route === "/api/auth/accept-invite") {
     if (!user) return json2({ error: "Sign in required" }, 401);

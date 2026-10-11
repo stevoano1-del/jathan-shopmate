@@ -1,11 +1,13 @@
-JATHAN SHOPMATE SIGN OUT & FINGERPRINT UPDATE
+JATHAN SHOPMATE RETURNS, PASSWORDS & DEBTORS UPDATE
 
 1. Extract this NEW ZIP.
 2. Open https://github.com/stevoano1-del/jathan-shopmate
 3. Add file > Upload files.
-4. Upload ALL extracted files into the repository ROOT, replacing matching files. Especially replace server.mjs, shopmate.js, shopmate.css and index.html. Do not upload the outer ZIP or put files into a subfolder.
+4. Upload ALL extracted files into the repository ROOT, replacing matching files. Especially replace server.mjs, shopmate.js, shopmate.css and index.html. Do not upload this outer ZIP or use a subfolder.
 5. Commit to main. Tell me uploaded so I can deploy and verify.
 
-After deployment: sign in with your password, open Account, choose Enable fingerprint / phone lock and follow the phone prompt. On the login page, choose the correct owner/worker tab, then Fingerprint / phone lock. Sign out is also visible at the top.
+Worker: Sell > My sales & returns > Record return.
+Owner: Debtors > Add debtor; record payments; review and open the WhatsApp message.
+Show/Hide appears beside password inputs. Confirm passwords when creating or resetting accounts.
 
-Existing records, accounts and the /data volume are preserved. This includes all previous changes. Do not delete the volume or upload private backups. EDITABLE-SOURCE.zip is supplied for maintenance.
+All earlier login, fingerprint, photo-entry and backup features are included. Existing records and accounts are preserved. Keep the /data volume; never upload private records or backups to GitHub. EDITABLE-SOURCE.zip contains maintained source.
