@@ -1,13 +1,11 @@
-JATHAN SHOPMATE PHOTO & SALES UPDATE
+JATHAN SHOPMATE OWNER & WORKER LOGIN UPDATE
 
-This includes the previous safety/backup update; use this package instead of uploading both.
-
-1. Extract the ZIP.
+1. Extract this ZIP.
 2. Open https://github.com/stevoano1-del/jathan-shopmate
 3. Add file > Upload files.
-4. Upload every extracted file to the repository ROOT, replacing matching files. Do not upload this outer ZIP or put the files in a subfolder. EDITABLE-SOURCE.zip is included for future maintenance.
-5. Commit to main. Railway should deploy automatically. Tell me uploaded so I can verify the live release and offsite backup.
+4. Upload all extracted files to the repository ROOT, replacing existing matching files. Do not upload this outer ZIP or use a subfolder.
+5. Commit to main. Tell me uploaded so I can verify the live deployment.
 
-Try Products > Add from invoice photo, review and confirm. Workers use Sell and tap product buttons. Owner adds workers as Cashier in Staff & Settings.
+Owner signs in normally, opens Staff & Settings > Create worker login, creates credentials and gives them privately to the worker. The worker chooses Shop worker on the login page and records completed sales. Owner Dashboard > Today’s sales by worker refreshes every five seconds while open.
 
-Keep the existing /data volume. Your existing records and accounts are preserved. Never put business backups or customer records on GitHub.
+Existing accounts, products, sales and the /data volume are preserved. Do not delete the volume or upload real data/backups into GitHub. This package includes earlier photo-entry and backup features. EDITABLE-SOURCE.zip is for future maintenance.

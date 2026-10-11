@@ -78,3 +78,17 @@ Sell: tap a product card. Repeated taps increase the same cart line. Use +/− f
 Owner: Staff & Settings → Add staff → Cashier → assigned sections. Share the private invitation code with the worker. They create their own account using that email and code, or sign in and accept an invitation. Cashiers start on Sell and see a sales-only navigation. Server rules block imports, stock administration, price overrides, discounts, refunds and reports. Sales record the worker email. Owners retain reports and administration.
 
 Validation: production build, 77 integration checks and 8 invoice parsing checks passed. The reader CDN assets returned HTTP 200. A real phone camera/photo workflow still needs device testing after deployment.
+
+## Owner and worker login update
+
+The login page now offers Shop owner and Shop worker. Owners use existing email/password. Owner → Staff & Settings → Create worker login: supply a worker name, a unique username (3–40 characters), a password (10–128 characters) and at least one assigned section. The owner shares those credentials privately. Each worker logs in immediately through Shop worker, without signup or invitation codes. Existing invited cashiers can use their email/password through Shop worker. Existing manager accounts retain their previous permissions.
+
+Worker accounts are always Cashier. They see the sales screen and assigned products with prices. Tap Coke (or another product), adjust quantity, select payment and Complete sale. Accounts do not permit price changes, discounts, imports, stock management, refunds, reports or backups. Owner sees completed sales on Today’s sales by worker and sales history with worker names. Refresh occurs every five seconds while the owner’s page is visible, online and not saving. Unfinished carts do not count as sales.
+
+Owner can reset worker passwords and remove access in Staff & Settings. Resets sign out existing sessions; removal prevents further worker login. Passwords are hashed in storage and are never returned on staff lists. The credentials confirmation window displays the password the owner just supplied; share it privately and close the window. Removed usernames remain reserved, so use a new username if creating a replacement account.
+
+Cart drafts are isolated per signed-in account on a shared device. Private business data stays separated. A new worker_accounts table is created automatically; existing data is preserved. The daily full SQLite backup includes the new table.
+
+Validation: the previous 85 checks plus 26 worker account checks passed (111 checks total). Worker tests cover owner provisioning, wrong passwords, login separation, worker sales attribution, section limits, forbidden administration, cross-shop reset rejection, session invalidation, access removal and password secrecy.
+
+The browser security policy now permits the version-pinned OCR reader’s CDN assets and local worker execution, correcting the previous deployment’s restriction on photo reading. Real phone photo accuracy still needs review and device testing.
