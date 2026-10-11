@@ -14,6 +14,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 var sqlite = new DatabaseSync(path.join(dataDir, "shopmate.sqlite"));
 sqlite.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 sqlite.exec(`CREATE TABLE IF NOT EXISTS businesses(id TEXT PRIMARY KEY,owner TEXT NOT NULL,data TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 0);CREATE TABLE IF NOT EXISTS members(email TEXT PRIMARY KEY,business TEXT NOT NULL,role TEXT NOT NULL,sections TEXT NOT NULL DEFAULT '[]');CREATE INDEX IF NOT EXISTS idx_members_business ON members(business);CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,password TEXT NOT NULL,recovery TEXT,created TEXT NOT NULL);CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user TEXT NOT NULL,expires INTEGER NOT NULL);CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires);CREATE TABLE IF NOT EXISTS invites(email TEXT PRIMARY KEY,business TEXT NOT NULL,hash TEXT NOT NULL,expires INTEGER NOT NULL,role TEXT NOT NULL,sections TEXT NOT NULL);`);
+sqlite.exec(`CREATE TABLE IF NOT EXISTS worker_accounts(user TEXT PRIMARY KEY REFERENCES users(id),username TEXT NOT NULL UNIQUE,business TEXT NOT NULL);`);
 var Statement = class {
   sql;
   args = [];
@@ -712,6 +713,55 @@ async function auth(req, ip) {
     activate(user, i);
     return json({ ok: true });
   }
+  if (route === "/api/auth/create-worker" || route === "/api/auth/reset-worker") {
+    if (!user) return json({ error: "Sign in required" }, 401);
+    const h = new Headers({ "oai-authenticated-user-id": user.id, "oai-authenticated-user-email": user.email });
+    const c = await context(new Request(new URL("/api/shop", req.url), { headers: h }));
+    if (!c || c.role !== "Owner") return json({ error: "Owner access required" }, 403);
+    if (!passwordValid(a.password)) return json({ error: "Use a password with 10 to 128 characters." }, 400);
+    const username = String(a.username || "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username)) return json({ error: "Username needs 3\u201340 letters, numbers, dots, dashes or underscores." }, 400);
+    if (route === "/api/auth/reset-worker") {
+      const worker = sqlite.prepare("SELECT * FROM worker_accounts WHERE username=? AND business=?").get(username, c.id);
+      if (!worker) return json({ error: "Worker not found in your shop" }, 404);
+      const password2 = await hashPassword(a.password);
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        sqlite.prepare("UPDATE users SET password=?,recovery=NULL WHERE id=?").run(password2, worker.user);
+        sqlite.prepare("DELETE FROM sessions WHERE user=?").run(worker.user);
+        sqlite.exec("COMMIT");
+      } catch (e) {
+        sqlite.exec("ROLLBACK");
+        throw e;
+      }
+      return json({ ok: true });
+    }
+    const name = String(a.name || "").trim();
+    const sections = JSON.parse(c.row.data).sections;
+    if (!name || name.length > 100 || !Array.isArray(a.sections) || !a.sections.length || a.sections.some((x) => !sections.includes(x))) return json({ error: "Enter a name and assign at least one valid section." }, 400);
+    if (sqlite.prepare("SELECT user FROM worker_accounts WHERE username=?").get(username)) return json({ error: "That username is already taken. Add your shop name to make it unique." }, 409);
+    const id = randomUUID2(), workerEmail = id + "@workers.shopmate.local", password = await hashPassword(a.password);
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      sqlite.prepare("INSERT INTO users(id,email,name,password,created) VALUES(?,?,?,?,?)").run(id, workerEmail, name, password, (/* @__PURE__ */ new Date()).toISOString());
+      sqlite.prepare("INSERT INTO worker_accounts(user,username,business) VALUES(?,?,?)").run(id, username, c.id);
+      sqlite.prepare("INSERT INTO members(email,business,role,sections) VALUES(?,?,?,?)").run(workerEmail, c.id, "Cashier", JSON.stringify(a.sections));
+      sqlite.exec("COMMIT");
+    } catch (e) {
+      sqlite.exec("ROLLBACK");
+      throw e;
+    }
+    return json({ ok: true, username, name });
+  }
+  if (route === "/api/auth/login" && a.portal === "worker") {
+    const username = String(a.username || a.email || "").trim().toLowerCase();
+    const row2 = sqlite.prepare("SELECT users.* FROM users LEFT JOIN worker_accounts ON worker_accounts.user=users.id WHERE worker_accounts.username=? OR users.email=?").get(username, username);
+    const dummy = "8fac43c1b24b23017f673f4923a4afea:" + "0".repeat(128);
+    if (typeof a.password !== "string" || a.password.length > 128 || !await matches(a.password, row2?.password || dummy) || !row2) return json({ error: "Incorrect worker login or password." }, 401);
+    const member = sqlite.prepare("SELECT role FROM members WHERE email=?").get(row2.email);
+    if (member?.role !== "Cashier") return json({ error: "This account does not have worker sales access. Contact your shop owner." }, 403);
+    return startSession(row2);
+  }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json({ error: "Enter a valid email." }, 400);
   const row = sqlite.prepare("SELECT * FROM users WHERE email=?").get(email);
   if (route === "/api/auth/signup") {
@@ -737,6 +787,8 @@ async function auth(req, ip) {
     const dummy = "8fac43c1b24b23017f673f4923a4afea:" + "0".repeat(128);
     const valid = await matches(a.password, row?.password || dummy);
     if (!row || !valid) return json({ error: "Incorrect email or password." }, 401);
+    const m = sqlite.prepare("SELECT role FROM members WHERE email=?").get(row.email);
+    if (a.portal === "owner" && m?.role === "Cashier") return json({ error: "Please use Shop worker login." }, 403);
     return startSession(row);
   }
   if (route === "/api/auth/reset") {
@@ -759,6 +811,9 @@ async function auth(req, ip) {
 async function shop(req) {
   const user = sessionUser(req);
   if (!user) return json({ error: "Sign in required" }, 401);
+  const worker = sqlite.prepare("SELECT business FROM worker_accounts WHERE user=?").get(user.id);
+  if (worker && !sqlite.prepare("SELECT email FROM members WHERE email=? AND business=? AND role=?").get(user.email, worker.business, "Cashier")) return json({ error: "Worker access removed. Contact your shop owner." }, 403);
+  if (worker && new URL(req.url).searchParams.get("demo") === "1") return json({ error: "Worker accounts are for sales in the assigned shop." }, 403);
   const h = new Headers(req.headers);
   h.delete("oai-authenticated-user-id");
   h.delete("oai-authenticated-user-email");
@@ -789,11 +844,16 @@ async function shop(req) {
     const r = await GET(trusted);
     if (!r.ok || new URL(req.url).searchParams.has("image")) return r;
     const j = await r.json();
+    j.data.sales = j.data.sales.map((sale) => ({ ...sale, byName: sqlite.prepare("SELECT name FROM users WHERE email=?").get(sale.by)?.name || sale.by }));
     if (j.role === "Owner") {
       const member = sqlite.prepare("SELECT business FROM members WHERE email=?").get(user.email);
       const id = member?.business || user.id;
       if (new URL(req.url).searchParams.get("demo") !== "1") {
         const pending = sqlite.prepare("SELECT email,role,sections FROM invites WHERE business=? AND expires>?").all(id, Date.now());
+        j.members = j.members.map((m) => {
+          const detail = sqlite.prepare("SELECT users.name,worker_accounts.username FROM users LEFT JOIN worker_accounts ON worker_accounts.user=users.id WHERE users.email=?").get(m.email);
+          return { ...m, ...detail };
+        });
         j.members.push(...pending.map((x) => ({ ...x, role: x.role + " (invited)" })));
       }
     }
@@ -803,6 +863,8 @@ async function shop(req) {
     const a = h.get("content-type")?.includes("application/json") ? JSON.parse(Buffer.from(body).toString()) : null;
     const r = await POST(trusted);
     if (r.ok && a?.type === "removeStaff") {
+      const removed = sqlite.prepare("SELECT id FROM users WHERE email=?").get(a.email);
+      if (removed) sqlite.prepare("DELETE FROM sessions WHERE user=?").run(removed.id);
       const member = sqlite.prepare("SELECT business FROM members WHERE email=?").get(user.email);
       sqlite.prepare("DELETE FROM invites WHERE email=? AND business=?").run(a.email, member?.business || user.id);
     }
@@ -893,7 +955,7 @@ var server = http.createServer(async (incoming, out) => {
     responseHeaders["X-Content-Type-Options"] = "nosniff";
     responseHeaders["Referrer-Policy"] = "same-origin";
     responseHeaders["X-Frame-Options"] = "DENY";
-    responseHeaders["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    responseHeaders["Content-Security-Policy"] = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://cdn.jsdelivr.net https://tessdata.projectnaptha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
     if (url.pathname.startsWith("/api/")) responseHeaders["Cache-Control"] = "no-store";
     out.writeHead(r.status, responseHeaders);
     out.end(Buffer.from(await r.arrayBuffer()));
