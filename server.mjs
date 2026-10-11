@@ -23048,6 +23048,7 @@ function whatsappPhone(value) {
   if (!/^[1-9]\d{7,14}$/.test(phone)) throw Error("Enter a valid WhatsApp number, including country code (or an 11-digit Nigerian number).");
   return phone;
 }
+var debtorBalance = (d) => Math.round((d.amount - d.payments.reduce((n, p) => n + p.amount, 0) - (d.credits || []).reduce((n, c) => n + c.amount, 0)) * 100) / 100;
 
 // shared/products.ts
 var normal = (v) => String(v ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
@@ -23116,7 +23117,7 @@ function calculateReport(s, { section = "All sections", from = "", to = "" } = {
 // server/shop.ts
 var db2 = () => env.DB;
 var uid = () => crypto.randomUUID();
-var blank = () => ({ name: "My shop", sections: ["Provisions", "Frozen & Other Items"], products: [], sales: [], expenses: [], movements: [], counts: [], audit: [], debtors: [] });
+var blank = () => ({ name: "My shop", sections: ["Provisions", "Frozen & Other Items"], products: [], sales: [], expenses: [], movements: [], counts: [], audit: [], debtors: [], customers: [] });
 var fail = (s) => {
   throw new Error(s);
 };
@@ -23135,9 +23136,11 @@ async function context(req) {
   return { id, email, role: demo || row.owner === email ? "Owner" : member?.role || "Cashier", sections: JSON.parse(member?.sections || "[]"), row };
 }
 function visible(c, s) {
+  s.customers ||= [];
+  const customerNames = s.customers.map(({ id, name }) => ({ id, name }));
   if (c.role === "Owner") return s;
-  if (c.role === "Manager") return { ...s, debtors: [] };
-  return { ...s, products: s.products.filter((p) => c.sections.includes(p.section)).map(({ cost, ...p }) => p), sales: s.sales.filter((x) => x.by === c.email).map(({ cost, ...x }) => ({ ...x, items: x.items.map(({ cost: cost2, ...i }) => i), refunds: x.refunds.map(({ cost: cost2, ...r }) => r) })), expenses: [], movements: [], counts: [], audit: [], debtors: [] };
+  if (c.role === "Manager") return { ...s, debtors: [], customers: customerNames };
+  return { ...s, products: s.products.filter((p) => c.sections.includes(p.section)).map(({ cost, ...p }) => p), sales: s.sales.filter((x) => x.by === c.email).map(({ cost, ...x }) => ({ ...x, items: x.items.map(({ cost: cost2, ...i }) => i), refunds: x.refunds.map(({ cost: cost2, ...r }) => r) })), expenses: [], movements: [], counts: [], audit: [], debtors: [], customers: customerNames };
 }
 async function GET(req) {
   try {
@@ -23173,6 +23176,7 @@ async function POST(req) {
     const a = await req.json();
     const s = JSON.parse(c.row.data);
     s.debtors ||= [];
+    s.customers ||= [];
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const businessDate = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
     const owner = () => {
@@ -23271,6 +23275,22 @@ async function POST(req) {
       }
       p.quantity = Math.max(0, p.quantity - q);
     };
+    if (a.type === "customer") {
+      owner();
+      if (typeof a.id !== "string" || !a.id || a.id.length > 100) fail("Customer reference required");
+      const name = String(a.name || "").trim();
+      if (!name || name.length > 150) fail("Enter customer name");
+      const phone = whatsappPhone(String(a.phone || ""));
+      const existing = s.customers.find((x) => x.id === a.id);
+      if (existing) {
+        existing.name = name;
+        existing.phone = phone;
+        for (const d of s.debtors.filter((d2) => d2.customerId === a.id)) {
+          d.name = name;
+          d.phone = phone;
+        }
+      } else s.customers.push({ id: a.id, name, phone });
+    }
     if (a.type === "sale") {
       if (s.sales.some((x) => x.id === a.id)) return Response.json({ ok: true, duplicate: true });
       if (!a.id || typeof a.id !== "string" || a.id.length > 100) fail("A valid receipt ID is required");
@@ -23301,8 +23321,22 @@ async function POST(req) {
       const total = cents(subtotal - discount);
       if (!Array.isArray(a.payments) || a.payments.some((p) => !["Cash", "Bank transfer", "POS/card"].includes(p.method))) fail("Choose a valid payment method");
       const paid = (a.payments || []).reduce((n, x) => n + num(x.amount), 0);
-      if (Math.abs(paid - total) > 5e-3) fail("Payments must equal the sale total");
-      s.sales.unshift({ id: a.id || uid(), items, total, cost: items.reduce((n, i) => n + i.cost, 0), discount, payments: a.payments, at: now, by: c.email, refunds: [] });
+      const customerType = a.customerType || "Walk-in";
+      if (!["Walk-in", "Existing customer"].includes(customerType)) fail("Choose a customer type");
+      const customer = customerType === "Existing customer" ? s.customers.find((x) => x.id === a.customerId) || fail("Select a registered existing customer") : null;
+      if (customer && paid !== 0) fail("Credit sales must use pay later");
+      if (!customer && Math.abs(paid - total) > 5e-3) fail("Payments must equal the sale total");
+      s.sales.unshift({ id: a.id, items, total, cost: items.reduce((n, i) => n + i.cost, 0), discount, payments: a.payments, customerType, customerId: customer?.id || null, customerName: customer?.name || "Walk-in", at: now, by: c.email, refunds: [] });
+      if (customer) {
+        let d = s.debtors.find((d2) => d2.customerId === customer.id);
+        if (!d) {
+          d = { id: uid(), customerId: customer.id, name: customer.name, phone: customer.phone, items: [], amount: 0, payments: [], credits: [], purchases: [], note: "Credit sales recorded at checkout", at: now, by: c.email };
+          s.debtors.unshift(d);
+        }
+        d.amount = cents(d.amount + total);
+        d.items.push(...items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price, saleId: a.id })));
+        d.purchases.push({ saleId: a.id, amount: total, at: now, by: c.email });
+      }
     }
     if (a.type === "return") {
       const sale = s.sales.find((x) => x.id === a.sale) || fail("Sale not found");
@@ -23323,6 +23357,13 @@ async function POST(req) {
       if (c.role === "Cashier" && !c.sections.includes(p.section)) fail("Ask the owner to return stock now assigned to another section.");
       i.returned += q;
       const refund = { id: uid(), requestId: a.returnId || null, product: i.product, itemIndex, section: i.section, quantity: q, amount: cents(q * i.price), cost: cents(q * i.cost / i.quantity), resellable: !!a.resellable, at: now, by: c.email, reason: a.reason };
+      if (sale.customerId) {
+        const d = s.debtors.find((d2) => d2.customerId === sale.customerId) || fail("Credit account not found");
+        const debtReduction = Math.min(refund.amount, Math.max(0, debtorBalance(d)));
+        Object.assign(refund, { debtReduction, cashRefund: cents(refund.amount - debtReduction) });
+        d.credits ||= [];
+        d.credits.push({ id: refund.id, saleId: sale.id, amount: debtReduction, at: now, reason: a.reason });
+      }
       sale.refunds.push(refund);
       if (a.resellable) {
         if (p.expiryTracked && (!a.expiry || a.expiry < businessDate)) fail("Valid expiry required for return");
@@ -23465,7 +23506,7 @@ async function POST(req) {
       const d = s.debtors.find((d2) => d2.id === a.id) || fail("Debtor not found");
       if (d.payments.some((p) => p.id === a.paymentId)) return Response.json({ ok: true, duplicate: true });
       if (typeof a.paymentId !== "string" || !a.paymentId || a.paymentId.length > 100) fail("A payment reference is required.");
-      const amount = cents(num(a.amount, 0.01)), balance = cents(d.amount - d.payments.reduce((n, p) => n + p.amount, 0));
+      const amount = cents(num(a.amount, 0.01)), balance = debtorBalance(d);
       if (amount > balance) fail("Payment exceeds the remaining debt.");
       d.payments.push({ id: a.paymentId, amount, note: String(a.note || "").slice(0, 500), at: now, by: c.email });
     }
@@ -23474,7 +23515,7 @@ async function POST(req) {
       const d = s.debtors.find((d2) => d2.id === a.id) || fail("Debtor not found");
       d.phone = whatsappPhone(String(a.phone || ""));
     }
-    const known = ["debtor", "debtorPayment", "debtorContact", "price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
+    const known = ["customer", "debtor", "debtorPayment", "debtorContact", "price", "transfer", "countCancel", "settings", "product", "receive", "sale", "return", "damage", "countStart", "countSubmit", "countApprove", "expense"];
     if (!known.includes(a.type)) fail("Unknown action");
     s.audit.unshift({ id: uid(), action: a.type, at: now, by: c.email });
     const result = await db2().prepare("UPDATE businesses SET data=?,version=version+1 WHERE id=? AND version=?").bind(JSON.stringify(s), c.id, c.row.version).run();

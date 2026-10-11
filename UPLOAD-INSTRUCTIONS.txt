@@ -1,13 +1,2 @@
-JATHAN SHOPMATE RETURNS, PASSWORDS & DEBTORS UPDATE
-
-1. Extract this NEW ZIP.
-2. Open https://github.com/stevoano1-del/jathan-shopmate
-3. Add file > Upload files.
-4. Upload ALL extracted files into the repository ROOT, replacing matching files. Especially replace server.mjs, shopmate.js, shopmate.css and index.html. Do not upload this outer ZIP or use a subfolder.
-5. Commit to main. Tell me uploaded so I can deploy and verify.
-
-Worker: Sell > My sales & returns > Record return.
-Owner: Debtors > Add debtor; record payments; review and open the WhatsApp message.
-Show/Hide appears beside password inputs. Confirm passwords when creating or resetting accounts.
-
-All earlier login, fingerprint, photo-entry and backup features are included. Existing records and accounts are preserved. Keep the /data volume; never upload private records or backups to GitHub. EDITABLE-SOURCE.zip contains maintained source.
+This package replaces the earlier returns/passwords/debtors update.
+Extract the ZIP. Upload ALL 13 extracted files to the root of stevoano1-del/jathan-shopmate on main, replacing matching files. Do not upload the outer ZIP itself. Keep EDITABLE-SOURCE.zip zipped. After committing, tell me Uploaded so I can verify and publish the matching release.
