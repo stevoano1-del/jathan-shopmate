@@ -1,1 +1,1 @@
-Extract and upload all 13 files to the root of stevoano1-del/jathan-shopmate on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes, then tell me Uploaded for deployment and verification. This contains all prior features and the settings/menu fix.
+Extract and upload all 13 files to the repository root on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Commit changes then tell me Uploaded. After publication, verify typed product name, quantity, category and photo-review fields on the affected phone.
