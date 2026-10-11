@@ -1,2 +1,1 @@
-This package replaces the earlier returns/passwords/debtors update.
-Extract the ZIP. Upload ALL 13 extracted files to the root of stevoano1-del/jathan-shopmate on main, replacing matching files. Do not upload the outer ZIP itself. Keep EDITABLE-SOURCE.zip zipped. After committing, tell me Uploaded so I can verify and publish the matching release.
+Extract this ZIP. Upload all 13 files to the root of stevoano1-del/jathan-shopmate on main, replacing matching files. Keep EDITABLE-SOURCE.zip zipped. Tell me Uploaded after committing for deployment verification. This cumulative package includes all earlier updates.

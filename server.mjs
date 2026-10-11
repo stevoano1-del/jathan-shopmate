@@ -23214,7 +23214,15 @@ async function POST(req) {
       s.name = String(a.name || "My shop").slice(0, 100);
       if (a.sections) {
         if (!Array.isArray(a.sections) || !a.sections.length) fail("At least one section required");
-        s.sections = [...new Set(a.sections.map((x) => String(x).trim()).filter(Boolean))];
+        const clean = a.sections.map((x) => {
+          if (typeof x !== "string") fail("Section names must be text");
+          const name = x.trim().replace(/\s+/g, " ");
+          if (!name || name.length > 100) fail("Section names must be between 1 and 100 characters");
+          return name;
+        });
+        if (clean.length > 100) fail("Use up to 100 sections");
+        if (new Set(clean.map((x) => x.toLowerCase())).size !== clean.length) fail("Section names must be unique");
+        s.sections = clean;
         if (s.products.some((p) => !s.sections.includes(p.section))) fail("Move products before removing a section.");
       }
     }
